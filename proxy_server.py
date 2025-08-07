@@ -1,17 +1,9 @@
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, StreamingResponse, PlainTextResponse
 import httpx
 import uvicorn
 
 app = FastAPI()
-
-
-# 🛰️ Middleware para registrar todos los User-Agent
-@app.middleware("http")
-async def log_user_agent(request: Request, call_next):
-    user_agent = request.headers.get("user-agent", "N/A")
-    print(f"🛰️ User-Agent: {user_agent}")
-    return await call_next(request)
 
 
 @app.get("/stream")
@@ -24,12 +16,14 @@ async def stream(request: Request):
     range_header = request.headers.get("Range", "")
     client_ip = request.client.host
     method = request.method
+    user_agent = request.headers.get("User-Agent", "N/A")
 
+    print(f"🛰️ User-Agent: {user_agent}")
     print(f"🌐 Cliente: {client_ip} | Método: {method}")
     print(f"🔗 Enlace solicitado: {rd_url}")
     print(f"📡 Cliente solicitó rango: {range_header or 'SIN RANGO'}")
 
-    # 🎯 Detección automática de ffprobe por rango
+    # 🎯 Detecta si es ffprobe y redirige directo
     is_ffprobe = range_header == "bytes=0-"
     if is_ffprobe:
         print("🎯 ffprobe detectado por rango: redirigiendo directo a RD")
@@ -41,43 +35,38 @@ async def stream(request: Request):
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            rd_response = await client.request(
+            async with client.stream(
                 method=method,
                 url=rd_url,
                 headers=headers,
-                follow_redirects=True,
-                stream=True,
-            )
+                follow_redirects=True
+            ) as rd_response:
 
-            print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
-            print("🧾 Headers recibidos de RD:")
-            for k, v in rd_response.headers.items():
-                print(f"   {k}: {v}")
+                print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
+                print("🧾 Headers recibidos de RD:")
+                for k, v in rd_response.headers.items():
+                    print(f"   {k}: {v}")
 
-            # 🕵️ Confirmación de streaming real
-            print("🕵️ Infuse o Jellyfin hizo una solicitud real de streaming")
+                response_headers = {
+                    k: v for k, v in rd_response.headers.items()
+                    if k.lower() in [
+                        "content-type",
+                        "content-length",
+                        "content-range",
+                        "accept-ranges",
+                        "cache-control",
+                        "etag",
+                        "last-modified"
+                    ]
+                }
+                response_headers.setdefault("Accept-Ranges", "bytes")
 
-            # Headers que se reenviarán
-            response_headers = {
-                k: v for k, v in rd_response.headers.items()
-                if k.lower() in [
-                    "content-type",
-                    "content-length",
-                    "content-range",
-                    "accept-ranges",
-                    "cache-control",
-                    "etag",
-                    "last-modified"
-                ]
-            }
-            response_headers.setdefault("Accept-Ranges", "bytes")
-
-            status_code = 206 if "Content-Range" in rd_response.headers else 200
-            return StreamingResponse(
-                rd_response.aiter_bytes(),
-                status_code=status_code,
-                headers=response_headers
-            )
+                status_code = 206 if "Content-Range" in rd_response.headers else 200
+                return StreamingResponse(
+                    rd_response.aiter_bytes(),
+                    status_code=status_code,
+                    headers=response_headers
+                )
 
     except Exception as e:
         print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
