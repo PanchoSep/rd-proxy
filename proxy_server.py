@@ -31,8 +31,20 @@ async def stream(request: Request):
         return RedirectResponse(rd_url)
 
     headers = {}
-    if range_header:
-        headers["Range"] = range_header
+
+    # Detectar si es ffprobe (antes de hacer la solicitud)
+    is_ffprobe = (
+        range_header == "bytes=0-"
+        and user_agent.startswith("Lavf/")
+    )
+    
+    if is_ffprobe:
+        headers["Range"] = f"bytes=0-{MAX_BYTES_FOR_PROBE - 1}"
+        print(f"🎯 ffprobe detectado → forzando Range: {headers['Range']}")
+    else:
+        if range_header:
+            headers["Range"] = range_header
+
 
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
