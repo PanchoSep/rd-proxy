@@ -1,21 +1,8 @@
-# Usa una imagen oficial de Python
 FROM python:3.11-slim
 
-# Instala dependencias del sistema
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-
-# Crea el directorio de trabajo
 WORKDIR /app
+COPY rd_proxy.py /app
 
-# Copia los archivos necesarios
-COPY requirements.txt .
-COPY proxy_server.py .
+RUN pip install fastapi uvicorn aiohttp
 
-# Instala las dependencias de Python
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Expone el puerto 5000
-EXPOSE 5000
-
-# Ejecuta el servidor Flask
-CMD ["python", "proxy_server.py"]
+CMD ["uvicorn", "rd_proxy:app", "--host", "0.0.0.0", "--port", "5000"]
