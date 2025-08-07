@@ -35,11 +35,11 @@ async def stream(request: Request):
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            async with client.stream(
+            rd_response = await client.stream(
                 method=method,
                 url=rd_url,
                 headers=headers,
-                follow_redirects=True
+                follow_redirects=True,
             ) as rd_response:
 
                 print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
