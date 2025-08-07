@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, StreamingResponse, PlainTextResponse
 import httpx
 import uvicorn
@@ -35,46 +35,44 @@ async def stream(request: Request):
 
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
-            rd_response = await client.get(rd_url, headers=headers, stream=True)
+            async with client.stream("GET", rd_url, headers=headers) as rd_response:
+                print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
+                print("🧾 Headers recibidos de RD:")
+                for k, v in rd_response.headers.items():
+                    print(f"   {k}: {v}")
 
-            print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
-            print("🧾 Headers recibidos de RD:")
-            for k, v in rd_response.headers.items():
-                print(f"   {k}: {v}")
+                response_headers = {
+                    k: v for k, v in rd_response.headers.items()
+                    if k.lower() in [
+                        "content-type",
+                        "content-length",
+                        "content-range",
+                        "accept-ranges",
+                        "cache-control",
+                        "etag",
+                        "last-modified",
+                        "content-disposition"
+                    ]
+                }
+                response_headers.setdefault("Accept-Ranges", "bytes")
 
-            # Headers que se reenviarán
-            response_headers = {
-                k: v for k, v in rd_response.headers.items()
-                if k.lower() in [
-                    "content-type",
-                    "content-length",
-                    "content-range",
-                    "accept-ranges",
-                    "cache-control",
-                    "etag",
-                    "last-modified",
-                    "content-disposition"
-                ]
-            }
-            response_headers.setdefault("Accept-Ranges", "bytes")
+                status_code = 206 if "content-range" in rd_response.headers else 200
 
-            status_code = 206 if "content-range" in rd_response.headers else 200
+                async def iter_rd_content():
+                    try:
+                        async for chunk in rd_response.aiter_bytes():
+                            yield chunk
+                    except httpx.StreamClosed:
+                        print("⚠️ Stream cerrado por el cliente (posiblemente Infuse reanudando)")
+                    except Exception as e:
+                        print(f"❌ Error en iteración del stream: {e}")
+                        raise
 
-            async def iter_rd_content():
-                try:
-                    async for chunk in rd_response.aiter_bytes():
-                        yield chunk
-                except httpx.StreamClosed:
-                    print("⚠️ Stream cerrado por el cliente (posiblemente Infuse reanudando)")
-                except Exception as e:
-                    print(f"❌ Error en iteración del stream: {e}")
-                    raise
-
-            return StreamingResponse(
-                iter_rd_content(),
-                status_code=status_code,
-                headers=response_headers
-            )
+                return StreamingResponse(
+                    iter_rd_content(),
+                    status_code=status_code,
+                    headers=response_headers
+                )
 
     except Exception as e:
         print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
