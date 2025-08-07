@@ -14,11 +14,13 @@ async def stream(request: Request):
 
     range_header = request.headers.get("Range", "")
     client_ip = request.client.host
+    user_agent = request.headers.get("User-Agent", "unknown")
     method = request.method
 
     print(f"🌐 Cliente: {client_ip} | Método: {method}")
     print(f"🔗 Enlace solicitado: {rd_url}")
     print(f"📡 Cliente solicitó rango: {range_header or 'SIN RANGO'}")
+    print(f"🧭 User-Agent: {user_agent}")
 
     is_ffprobe = range_header == "bytes=0-"
     is_vps = client_ip.startswith("127.") or client_ip == "128.140.93.28"
@@ -45,6 +47,7 @@ async def stream(request: Request):
                 for k, v in rd_response.headers.items():
                     print(f"   {k}: {v}")
 
+                # Solo los headers relevantes
                 response_headers = {
                     k: v for k, v in rd_response.headers.items()
                     if k.lower() in [
@@ -55,12 +58,19 @@ async def stream(request: Request):
                         "cache-control",
                         "etag",
                         "last-modified",
-                        "content-disposition",
                     ]
                 }
 
+                # ⚠️ Corrige content-type si es inválido
+                if response_headers.get("content-type") == "application/force-download":
+                    response_headers["content-type"] = "video/x-matroska"
+
+                # Asegurar que acepte Range
+                response_headers.setdefault("Accept-Ranges", "bytes")
+
                 status_code = 206 if "content-range" in rd_response.headers else 200
 
+                # 🔁 Streaming manual controlado
                 async def send_body(scope, receive, send):
                     await send({
                         "type": "http.response.start",
