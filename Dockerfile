@@ -5,4 +5,4 @@ COPY proxy_server.py /app
 
 RUN pip install fastapi uvicorn aiohttp
 
-CMD ["uvicorn", "rd_proxy:app", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["uvicorn", "proxy_server:app", "--host", "0.0.0.0", "--port", "5000"]
