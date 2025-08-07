@@ -20,13 +20,20 @@ async def stream(request: Request):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(rd_url, headers=headers, timeout=aiohttp.ClientTimeout(total=None)) as rd_resp:
-                response_headers = {
-                    k: v for k, v in rd_resp.headers.items()
-                    if k in [
-                        "Content-Type", "Content-Length", "Content-Range",
-                        "Accept-Ranges", "ETag", "Last-Modified"
-                    ]
-                }
+                # Si Content-Range está presente, mantenlo. Pero no pongas Content-Length.
+                response_headers = {}
+                
+                if "Content-Type" in rd_resp.headers:
+                    response_headers["Content-Type"] = rd_resp.headers["Content-Type"]
+                if "Content-Range" in rd_resp.headers:
+                    response_headers["Content-Range"] = rd_resp.headers["Content-Range"]
+                if "Accept-Ranges" in rd_resp.headers:
+                    response_headers["Accept-Ranges"] = rd_resp.headers["Accept-Ranges"]
+                if "ETag" in rd_resp.headers:
+                    response_headers["ETag"] = rd_resp.headers["ETag"]
+                if "Last-Modified" in rd_resp.headers:
+                    response_headers["Last-Modified"] = rd_resp.headers["Last-Modified"]
+
                 response_headers.setdefault("Accept-Ranges", "bytes")
 
                 status_code = 206 if "Content-Range" in rd_resp.headers else 200
