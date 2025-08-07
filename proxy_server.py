@@ -1,6 +1,7 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse, RedirectResponse
-import aiohttp
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import RedirectResponse, StreamingResponse, PlainTextResponse
+import httpx
+import uvicorn
 
 app = FastAPI()
 
@@ -9,60 +10,69 @@ app = FastAPI()
 async def stream(request: Request):
     rd_url = request.query_params.get("link")
     if not rd_url or not rd_url.startswith("https://"):
-        raise HTTPException(status_code=400, detail="Missing or invalid 'link' parameter")
+        print("❌ Error: 'link' faltante o inválido")
+        return PlainTextResponse("Missing or invalid 'link' parameter", status_code=400)
 
-    user_agent = request.headers.get("User-Agent", "")
-    is_ffprobe = "ffprobe" in user_agent.lower()
+    range_header = request.headers.get("Range", "")
+    client_ip = request.client.host
+    method = request.method
 
+    print(f"🌐 Cliente: {client_ip} | Método: {method}")
+    print(f"🔗 Enlace solicitado: {rd_url}")
+    print(f"📡 Cliente solicitó rango: {range_header or 'SIN RANGO'}")
+
+    # 🎯 Detección automática de ffprobe por rango
+    is_ffprobe = range_header == "bytes=0-"
     if is_ffprobe:
-        print("🎯 ffprobe detectado, redirigiendo directamente a RD")
+        print("🎯 ffprobe detectado por rango: redirigiendo directo a RD")
         return RedirectResponse(rd_url)
 
     headers = {}
-    range_header = request.headers.get("Range")
     if range_header:
         headers["Range"] = range_header
-        print(f"📡 Cliente solicitó rango: {range_header}")
-    else:
-        print("📡 Solicitud sin rango (GET completo o HEAD)")
-
-    print(f"🔗 Enlace solicitado: {rd_url}")
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(rd_url, headers=headers, timeout=aiohttp.ClientTimeout(total=None)) as rd_resp:
-                response_headers = {
-                    k: v for k, v in rd_resp.headers.items()
-                    if k.lower() in [
-                        "content-type",
-                        "content-range",
-                        "accept-ranges",
-                        "etag",
-                        "last-modified"
-                    ]
-                }
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            rd_response = await client.request(
+                method=method,
+                url=rd_url,
+                headers=headers,
+                follow_redirects=True,
+                stream=True,
+            )
 
-                response_headers.setdefault("Accept-Ranges", "bytes")
-                status_code = 206 if "Content-Range" in rd_resp.headers else 200
+            print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
+            print("🧾 Headers recibidos de RD:")
+            for k, v in rd_response.headers.items():
+                print(f"   {k}: {v}")
 
-                async def content_stream():
-                    try:
-                        async for chunk in rd_resp.content.iter_chunked(1024 * 1024):
-                            yield chunk
-                    except aiohttp.ClientConnectionError:
-                        print("⚠️ Real-Debrid cerró la conexión antes de tiempo.")
+            # Headers que se reenviarán
+            response_headers = {
+                k: v for k, v in rd_response.headers.items()
+                if k.lower() in [
+                    "content-type",
+                    "content-length",
+                    "content-range",
+                    "accept-ranges",
+                    "cache-control",
+                    "etag",
+                    "last-modified"
+                ]
+            }
+            response_headers.setdefault("Accept-Ranges", "bytes")
 
-                return StreamingResponse(
-                    content_stream(),
-                    status_code=status_code,
-                    headers=response_headers
-                )
+            status_code = 206 if "Content-Range" in rd_response.headers else 200
+            return StreamingResponse(
+                rd_response.aiter_bytes(),
+                status_code=status_code,
+                headers=response_headers
+            )
 
     except Exception as e:
-        print(f"❌ Error general en el proxy: {e}")
-        raise HTTPException(status_code=500, detail="Proxy error")
+        print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
+        return PlainTextResponse("Internal Server Error", status_code=500)
 
 
-@app.get("/")
-def index():
-    return {"status": "ok", "message": "Real-Debrid proxy running"}
+if __name__ == "__main__":
+    print("🚀 Proxy Real-Debrid iniciando en puerto 5000...")
+    uvicorn.run("proxy_server:app", host="0.0.0.0", port=5000)
