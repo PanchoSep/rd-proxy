@@ -1,82 +1,49 @@
-from flask import Flask, request, Response, abort
-import requests
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.responses import StreamingResponse
+import aiohttp
 
-app = Flask(__name__)
+app = FastAPI()
 
-@app.route('/stream', methods=["GET", "HEAD"])
-def stream():
-    rd_url = request.args.get("link")
-
+@app.get("/stream")
+async def stream(request: Request):
+    rd_url = request.query_params.get("link")
     if not rd_url or not rd_url.startswith("https://"):
-        print("❌ Error: 'link' faltante o inválido")
-        return "Missing or invalid 'link' parameter", 400
+        raise HTTPException(status_code=400, detail="Missing or invalid 'link' parameter")
 
+    # Forward Range header if present
     headers = {}
-    range_header = request.headers.get("Range")
-    if range_header:
+    if range_header := request.headers.get("Range"):
         headers["Range"] = range_header
         print(f"📡 Cliente solicitó rango: {range_header}")
-    else:
-        print("📡 Solicitud sin rango (GET completo o HEAD)")
 
-    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
-    print(f"🌐 Cliente: {client_ip} | Método: {request.method}")
     print(f"🔗 Enlace solicitado: {rd_url}")
 
     try:
-        rd_response = requests.request(
-            method=request.method,
-            url=rd_url,
-            headers=headers,
-            stream=True,
-            timeout=10
-        )
+        async with aiohttp.ClientSession() as session:
+            async with session.request("GET", rd_url, headers=headers, timeout=aiohttp.ClientTimeout(total=None)) as rd_resp:
+                # Copy headers
+                response_headers = {}
+                for key in ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"]:
+                    if key in rd_resp.headers:
+                        response_headers[key] = rd_resp.headers[key]
 
-        print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
-        print("🧾 Headers recibidos de RD:")
-        for k, v in rd_response.headers.items():
-            print(f"   {k}: {v}")
+                # Asegura que se diga que se pueden hacer requests por rango
+                response_headers.setdefault("Accept-Ranges", "bytes")
 
-        # Headers que se reenviarán al cliente (filtrados)
-        response_headers = {
-            k: v for k, v in rd_response.headers.items()
-            if k.lower() in [
-                "content-type",
-                "content-length",
-                "content-range",
-                "accept-ranges",
-                "cache-control",
-                "etag",
-                "last-modified"
-            ]
-        }
+                # Determina status
+                status_code = 206 if "Content-Range" in rd_resp.headers else 200
 
-        # Asegura que haya Accept-Ranges al menos
-        response_headers.setdefault("Accept-Ranges", "bytes")
+                # Stream de chunks asincrónico
+                async def content_stream():
+                    async for chunk in rd_resp.content.iter_chunked(4 * 1024 * 1024):  # 4MB chunks
+                        yield chunk
 
-        # Determina si es respuesta parcial o completa
-        if "Content-Range" in rd_response.headers:
-            status_code = 206
-        else:
-            status_code = 200
-
-        # Si es HEAD, no se devuelve contenido
-        if request.method == "HEAD":
-            print("📭 Respuesta HEAD sin cuerpo")
-            return Response(status=status_code, headers=response_headers)
-
-        print(f"🚀 Iniciando stream hacia el cliente con HTTP {status_code}")
-        return Response(
-            rd_response.iter_content(chunk_size=8192),
-            status=status_code,
-            headers=response_headers
-        )
+                return StreamingResponse(
+                    content_stream(),
+                    status_code=status_code,
+                    headers=response_headers
+                )
 
     except Exception as e:
-        print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
-        abort(500)
-
-
-if __name__ == "__main__":
-    print("🚀 Proxy Real-Debrid iniciando en puerto 5000...")
-    app.run(host="0.0.0.0", port=5000)
+        print(f"❌ Error al hacer proxy: {e}")
+        raise HTTPException(status_code=500, detail="Proxy error")
