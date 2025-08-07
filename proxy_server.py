@@ -23,7 +23,7 @@ async def stream(request: Request):
     print(f"🔗 Enlace solicitado: {rd_url}")
     print(f"📡 Cliente solicitó rango: {range_header or 'SIN RANGO'}")
 
-    # 🎯 Detecta si es ffprobe y redirige directo
+    # 🎯 Detecta si es ffprobe desde localhost y redirige
     is_ffprobe = range_header == "bytes=0-" and client_ip == "127.0.0.1"
     if is_ffprobe:
         print("🎯 ffprobe detectado por rango desde localhost: redirigiendo directo a RD")
@@ -41,11 +41,11 @@ async def stream(request: Request):
                 for k, v in rd_response.headers.items():
                     print(f"   {k}: {v}")
 
+                # Reenviar solo los headers seguros (sin Content-Length)
                 response_headers = {
                     k: v for k, v in rd_response.headers.items()
                     if k.lower() in [
                         "content-type",
-                        "content-length",
                         "content-range",
                         "accept-ranges",
                         "cache-control",
@@ -71,6 +71,7 @@ async def stream(request: Request):
                 return StreamingResponse(
                     iter_rd_content(),
                     status_code=status_code,
+                    media_type=rd_response.headers.get("content-type", "application/octet-stream"),
                     headers=response_headers
                 )
 
