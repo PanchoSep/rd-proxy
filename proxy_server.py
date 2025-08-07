@@ -40,33 +40,34 @@ async def stream(request: Request):
                 url=rd_url,
                 headers=headers,
                 follow_redirects=True,
-            ) as rd_response:
+            )
 
-                print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
-                print("🧾 Headers recibidos de RD:")
-                for k, v in rd_response.headers.items():
-                    print(f"   {k}: {v}")
+            print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
+            print("🧾 Headers recibidos de RD:")
+            for k, v in rd_response.headers.items():
+                print(f"   {k}: {v}")
 
-                response_headers = {
-                    k: v for k, v in rd_response.headers.items()
-                    if k.lower() in [
-                        "content-type",
-                        "content-length",
-                        "content-range",
-                        "accept-ranges",
-                        "cache-control",
-                        "etag",
-                        "last-modified"
-                    ]
-                }
-                response_headers.setdefault("Accept-Ranges", "bytes")
+            response_headers = {
+                k: v for k, v in rd_response.headers.items()
+                if k.lower() in [
+                    "content-type",
+                    "content-length",
+                    "content-range",
+                    "accept-ranges",
+                    "cache-control",
+                    "etag",
+                    "last-modified"
+                ]
+            }
+            response_headers.setdefault("Accept-Ranges", "bytes")
 
-                status_code = 206 if "Content-Range" in rd_response.headers else 200
-                return StreamingResponse(
-                    rd_response.aiter_bytes(),
-                    status_code=status_code,
-                    headers=response_headers
-                )
+            status_code = 206 if "content-range" in rd_response.headers else 200
+
+            return StreamingResponse(
+                rd_response.aiter_bytes(),
+                status_code=status_code,
+                headers=response_headers
+            )
 
     except Exception as e:
         print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
