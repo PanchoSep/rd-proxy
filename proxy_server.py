@@ -1,7 +1,8 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse, StreamingResponse, PlainTextResponse
+from fastapi.responses import RedirectResponse, PlainTextResponse
 import httpx
 import uvicorn
+from starlette.responses import Response
 
 app = FastAPI()
 
@@ -26,8 +27,6 @@ async def stream(request: Request):
     if is_ffprobe and is_vps:
         print("🎯 ffprobe detectado DESDE VPS: redirigiendo directo a RD")
         return RedirectResponse(rd_url)
-    else:
-        print("🔁 ffprobe externo o petición normal: usando proxy")
 
     headers = {}
     if range_header:
@@ -35,45 +34,58 @@ async def stream(request: Request):
 
     try:
         async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream(
-                method=method,
-                url=rd_url,
+            rd_response = await client.get(
+                rd_url,
                 headers=headers,
                 follow_redirects=True,
-            ) as rd_response:
+                stream=True,
+            )
 
-                print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
-                print("🧾 Headers recibidos de RD:")
-                for k, v in rd_response.headers.items():
-                    print(f"   {k}: {v}")
+            print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
+            print("🧾 Headers recibidos de RD:")
+            for k, v in rd_response.headers.items():
+                print(f"   {k}: {v}")
 
-                response_headers = {
-                    k: v for k, v in rd_response.headers.items()
-                    if k.lower() in [
-                        "content-type",
-                        "content-length",
-                        "content-range",
-                        "accept-ranges",
-                        "cache-control",
-                        "etag",
-                        "last-modified",
-                        "content-disposition",
-                    ]
-                }
-                response_headers.setdefault("Accept-Ranges", "bytes")
+            # Filtrar headers válidos
+            response_headers = {
+                k: v for k, v in rd_response.headers.items()
+                if k.lower() in [
+                    "content-type",
+                    "content-length",
+                    "content-range",
+                    "accept-ranges",
+                    "cache-control",
+                    "etag",
+                    "last-modified",
+                    "content-disposition",
+                ]
+            }
 
-                status_code = 206 if "content-range" in rd_response.headers else 200
+            # Creamos una respuesta vacía
+            async def send_body(scope, receive, send):
+                await send({
+                    "type": "http.response.start",
+                    "status": rd_response.status_code,
+                    "headers": [
+                        (k.encode("latin-1"), v.encode("latin-1"))
+                        for k, v in response_headers.items()
+                    ],
+                })
 
-                # ✅ Generator robusto para evitar StreamClosed
-                async def stream_generator():
-                    async for chunk in rd_response.aiter_bytes():
-                        yield chunk
+                async for chunk in rd_response.aiter_bytes():
+                    await send({
+                        "type": "http.response.body",
+                        "body": chunk,
+                        "more_body": True,
+                    })
 
-                return StreamingResponse(
-                    stream_generator(),
-                    status_code=status_code,
-                    headers=response_headers
-                )
+                await send({
+                    "type": "http.response.body",
+                    "body": b"",
+                    "more_body": False,
+                })
+
+            return send_body
 
     except Exception as e:
         print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
