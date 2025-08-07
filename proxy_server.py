@@ -5,6 +5,7 @@ import uvicorn
 from mimetypes import guess_type
 
 app = FastAPI()
+MAX_BYTES_FOR_PROBE = 5 * 1024 * 1024  # 5 MB para ffprobe
 
 
 @app.get("/stream")
@@ -24,10 +25,9 @@ async def stream(request: Request):
     print(f"🔗 Enlace solicitado: {rd_url}")
     print(f"📡 Cliente solicitó rango: {range_header or 'SIN RANGO'}")
 
-    # 🎯 Detecta ffprobe desde localhost
-    is_ffprobe = range_header == "bytes=0-" and client_ip == "127.0.0.1"
-    if is_ffprobe:
-        print("🎯 ffprobe detectado: redirigiendo directo")
+    # Redirige si es ffprobe desde localhost (modo clásico Jellyfin)
+    if range_header == "bytes=0-" and client_ip == "127.0.0.1":
+        print("🎯 ffprobe desde localhost detectado: redirigiendo directo")
         return RedirectResponse(rd_url)
 
     headers = {}
@@ -38,15 +38,15 @@ async def stream(request: Request):
         async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
             async with client.stream("GET", rd_url, headers=headers) as rd_response:
                 print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
-                print("🧾 Headers recibidos de RD:")
+                print("🧾 Headers de RD:")
                 for k, v in rd_response.headers.items():
                     print(f"   {k}: {v}")
 
-                # Detectar content-type por extensión si RD da uno raro
+                # Detectar media_type por extensión
                 filename = rd_url.split("/")[-1]
                 detected_type = guess_type(filename)[0] or "application/octet-stream"
 
-                # Headers que reenviaremos (filtrados)
+                # Headers seguros (NO reenviar Content-Length ni Connection)
                 safe_headers = {
                     k: v for k, v in rd_response.headers.items()
                     if k.lower() in [
@@ -58,22 +58,33 @@ async def stream(request: Request):
                         "content-disposition"
                     ]
                 }
-
-                # Agregar Content-Length si está presente y seguro
-                if "content-length" in rd_response.headers:
-                    safe_headers["Content-Length"] = rd_response.headers["content-length"]
+                safe_headers.setdefault("Accept-Ranges", "bytes")
 
                 status_code = 206 if "content-range" in rd_response.headers else 200
+
+                # Detectar si es ffprobe (por User-Agent + Range inicial)
+                is_ffprobe = (
+                    range_header == "bytes=0-"
+                    and user_agent.startswith("Lavf/")
+                )
+                max_bytes = MAX_BYTES_FOR_PROBE if is_ffprobe else None
+                if is_ffprobe:
+                    print(f"🎯 ffprobe detectado por User-Agent: entregando solo primeros {MAX_BYTES_FOR_PROBE} bytes")
 
                 async def iter_rd_content():
                     sent = 0
                     try:
                         async for chunk in rd_response.aiter_bytes():
+                            if max_bytes is not None and sent + len(chunk) > max_bytes:
+                                chunk = chunk[: max_bytes - sent]
                             sent += len(chunk)
                             yield chunk
-                        print(f"✅ Stream finalizado, bytes enviados: {sent}")
+                            if max_bytes is not None and sent >= max_bytes:
+                                print(f"✅ Corte después de {sent} bytes (ffprobe)")
+                                break
+                        print(f"✅ Transmisión completada: {sent} bytes enviados")
                     except httpx.StreamClosed:
-                        print(f"⚠️ Stream cerrado prematuramente por cliente, bytes enviados: {sent}")
+                        print(f"⚠️ Cliente cerró conexión prematuramente. Bytes enviados: {sent}")
                     except Exception as e:
                         print(f"❌ Error en stream: {e}")
                         raise
@@ -86,7 +97,7 @@ async def stream(request: Request):
                 )
 
     except Exception as e:
-        print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
+        print(f"❌ Error en el proxy: {e}")
         return PlainTextResponse("Internal Server Error", status_code=500)
 
 
