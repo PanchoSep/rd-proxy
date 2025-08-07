@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, StreamingResponse, PlainTextResponse
 import httpx
 import uvicorn
+from mimetypes import guess_type
 
 app = FastAPI()
 
@@ -23,10 +24,10 @@ async def stream(request: Request):
     print(f"🔗 Enlace solicitado: {rd_url}")
     print(f"📡 Cliente solicitó rango: {range_header or 'SIN RANGO'}")
 
-    # 🎯 Detecta si es ffprobe desde localhost y redirige
+    # 🎯 Detecta ffprobe desde localhost
     is_ffprobe = range_header == "bytes=0-" and client_ip == "127.0.0.1"
     if is_ffprobe:
-        print("🎯 ffprobe detectado por rango desde localhost: redirigiendo directo a RD")
+        print("🎯 ffprobe detectado: redirigiendo directo")
         return RedirectResponse(rd_url)
 
     headers = {}
@@ -41,11 +42,14 @@ async def stream(request: Request):
                 for k, v in rd_response.headers.items():
                     print(f"   {k}: {v}")
 
-                # Reenviar solo los headers seguros (sin Content-Length)
-                response_headers = {
+                # Detectar content-type por extensión si RD da uno raro
+                filename = rd_url.split("/")[-1]
+                detected_type = guess_type(filename)[0] or "application/octet-stream"
+
+                # Headers que reenviaremos (filtrados)
+                safe_headers = {
                     k: v for k, v in rd_response.headers.items()
                     if k.lower() in [
-                        "content-type",
                         "content-range",
                         "accept-ranges",
                         "cache-control",
@@ -54,25 +58,31 @@ async def stream(request: Request):
                         "content-disposition"
                     ]
                 }
-                response_headers.setdefault("Accept-Ranges", "bytes")
+
+                # Agregar Content-Length si está presente y seguro
+                if "content-length" in rd_response.headers:
+                    safe_headers["Content-Length"] = rd_response.headers["content-length"]
 
                 status_code = 206 if "content-range" in rd_response.headers else 200
 
                 async def iter_rd_content():
+                    sent = 0
                     try:
                         async for chunk in rd_response.aiter_bytes():
+                            sent += len(chunk)
                             yield chunk
+                        print(f"✅ Stream finalizado, bytes enviados: {sent}")
                     except httpx.StreamClosed:
-                        print("⚠️ Stream cerrado por el cliente (posiblemente Infuse reanudando)")
+                        print(f"⚠️ Stream cerrado prematuramente por cliente, bytes enviados: {sent}")
                     except Exception as e:
-                        print(f"❌ Error en iteración del stream: {e}")
+                        print(f"❌ Error en stream: {e}")
                         raise
 
                 return StreamingResponse(
                     iter_rd_content(),
                     status_code=status_code,
-                    media_type=rd_response.headers.get("content-type", "application/octet-stream"),
-                    headers=response_headers
+                    media_type=detected_type,
+                    headers=safe_headers
                 )
 
     except Exception as e:
