@@ -5,7 +5,7 @@ import uvicorn
 from mimetypes import guess_type
 
 app = FastAPI()
-MAX_BYTES_FOR_PROBE = 5 * 1024 * 1024  # 5 MB para ffprobe
+MAX_BYTES_FOR_PROBE = 5 * 1024 * 1024  # 5 MB
 
 
 @app.get("/stream")
@@ -25,7 +25,7 @@ async def stream(request: Request):
     print(f"🔗 Enlace solicitado: {rd_url}")
     print(f"📡 Cliente solicitó rango: {range_header or 'SIN RANGO'}")
 
-    # Redirige si es ffprobe desde localhost (modo clásico Jellyfin)
+    # Redirige si es ffprobe desde localhost
     if range_header == "bytes=0-" and client_ip == "127.0.0.1":
         print("🎯 ffprobe desde localhost detectado: redirigiendo directo")
         return RedirectResponse(rd_url)
@@ -62,7 +62,7 @@ async def stream(request: Request):
 
                 status_code = 206 if "content-range" in rd_response.headers else 200
 
-                # Detectar si es ffprobe (por User-Agent + Range inicial)
+                # Detectar si es ffprobe
                 is_ffprobe = (
                     range_header == "bytes=0-"
                     and user_agent.startswith("Lavf/")
@@ -75,14 +75,18 @@ async def stream(request: Request):
                     sent = 0
                     try:
                         async for chunk in rd_response.aiter_bytes():
-                            if max_bytes is not None and sent + len(chunk) > max_bytes:
-                                chunk = chunk[: max_bytes - sent]
+                            if not chunk:
+                                continue
+                            if max_bytes is not None:
+                                remaining = max_bytes - sent
+                                if remaining <= 0:
+                                    print(f"✅ Corte después de {sent} bytes (ffprobe)")
+                                    break
+                                if len(chunk) > remaining:
+                                    chunk = chunk[:remaining]
                             sent += len(chunk)
                             yield chunk
-                            if max_bytes is not None and sent >= max_bytes:
-                                print(f"✅ Corte después de {sent} bytes (ffprobe)")
-                                break
-                        print(f"✅ Transmisión completada: {sent} bytes enviados")
+                        print(f"✅ Transmisión finalizada, bytes enviados: {sent}")
                     except httpx.StreamClosed:
                         print(f"⚠️ Cliente cerró conexión prematuramente. Bytes enviados: {sent}")
                     except Exception as e:
