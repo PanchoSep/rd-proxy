@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 import aiohttp
 
@@ -11,37 +11,48 @@ async def stream(request: Request):
         raise HTTPException(status_code=400, detail="Missing or invalid 'link' parameter")
 
     headers = {}
-    if range_header := request.headers.get("Range"):
+    range_header = request.headers.get("Range")
+    if range_header:
         headers["Range"] = range_header
         print(f"📡 Cliente solicitó rango: {range_header}")
+
+    user_agent = request.headers.get("User-Agent", "")
+    is_ffprobe = "ffprobe" in user_agent.lower()
+    if is_ffprobe:
+        print("🎯 Solicitud detectada como ffprobe")
 
     print(f"🔗 Enlace solicitado: {rd_url}")
 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(rd_url, headers=headers, timeout=aiohttp.ClientTimeout(total=None)) as rd_resp:
-                # Si Content-Range está presente, mantenlo. Pero no pongas Content-Length.
-                response_headers = {}
-                
-                if "Content-Type" in rd_resp.headers:
-                    response_headers["Content-Type"] = rd_resp.headers["Content-Type"]
-                if "Content-Range" in rd_resp.headers:
-                    response_headers["Content-Range"] = rd_resp.headers["Content-Range"]
-                if "Accept-Ranges" in rd_resp.headers:
-                    response_headers["Accept-Ranges"] = rd_resp.headers["Accept-Ranges"]
-                if "ETag" in rd_resp.headers:
-                    response_headers["ETag"] = rd_resp.headers["ETag"]
-                if "Last-Modified" in rd_resp.headers:
-                    response_headers["Last-Modified"] = rd_resp.headers["Last-Modified"]
+                response_headers = {
+                    k: v for k, v in rd_resp.headers.items()
+                    if k.lower() in [
+                        "content-type",
+                        "content-range",
+                        "accept-ranges",
+                        "etag",
+                        "last-modified"
+                    ]
+                }
 
                 response_headers.setdefault("Accept-Ranges", "bytes")
-
                 status_code = 206 if "Content-Range" in rd_resp.headers else 200
 
                 async def content_stream():
                     try:
-                        async for chunk in rd_resp.content.iter_chunked(4 * 1024 * 1024):
+                        read_bytes = 0
+                        limit_bytes = 10 * 1024 * 1024  # 10 MB para ffprobe
+
+                        async for chunk in rd_resp.content.iter_chunked(1024 * 1024):  # 1MB chunks
+                            read_bytes += len(chunk)
                             yield chunk
+
+                            if is_ffprobe and read_bytes >= limit_bytes:
+                                print(f"🛑 Corte anticipado: enviado {read_bytes} bytes para ffprobe")
+                                break
+
                     except aiohttp.ClientConnectionError:
                         print("⚠️ Real-Debrid cerró la conexión antes de tiempo.")
 
