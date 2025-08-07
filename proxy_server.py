@@ -5,7 +5,6 @@ import uvicorn
 
 app = FastAPI()
 
-
 @app.get("/stream")
 async def stream(request: Request):
     rd_url = request.query_params.get("link")
@@ -21,11 +20,15 @@ async def stream(request: Request):
     print(f"🔗 Enlace solicitado: {rd_url}")
     print(f"📡 Cliente solicitó rango: {range_header or 'SIN RANGO'}")
 
-    # 🎯 Detección automática de ffprobe por rango
+    # ⚙️ Detectar si es ffprobe y si es desde VPS
     is_ffprobe = range_header == "bytes=0-"
-    if is_ffprobe:
-        print("🎯 ffprobe detectado por rango: redirigiendo directo a RD")
+    is_vps = client_ip.startswith("127.") or client_ip == "128.140.93.28"
+
+    if is_ffprobe and is_vps:
+        print("🎯 ffprobe detectado DESDE VPS: redirigiendo directo a RD")
         return RedirectResponse(rd_url)
+    else:
+        print("🔁 ffprobe externo o petición normal: usando proxy")
 
     headers = {}
     if range_header:
@@ -33,40 +36,38 @@ async def stream(request: Request):
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            rd_response = await client.request(
+            async with client.stream(
                 method=method,
                 url=rd_url,
                 headers=headers,
                 follow_redirects=True,
-                stream=True,
-            )
+            ) as rd_response:
 
-            print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
-            print("🧾 Headers recibidos de RD:")
-            for k, v in rd_response.headers.items():
-                print(f"   {k}: {v}")
+                print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
+                print("🧾 Headers recibidos de RD:")
+                for k, v in rd_response.headers.items():
+                    print(f"   {k}: {v}")
 
-            # Headers que se reenviarán
-            response_headers = {
-                k: v for k, v in rd_response.headers.items()
-                if k.lower() in [
-                    "content-type",
-                    "content-length",
-                    "content-range",
-                    "accept-ranges",
-                    "cache-control",
-                    "etag",
-                    "last-modified"
-                ]
-            }
-            response_headers.setdefault("Accept-Ranges", "bytes")
+                response_headers = {
+                    k: v for k, v in rd_response.headers.items()
+                    if k.lower() in [
+                        "content-type",
+                        "content-length",
+                        "content-range",
+                        "accept-ranges",
+                        "cache-control",
+                        "etag",
+                        "last-modified"
+                    ]
+                }
+                response_headers.setdefault("Accept-Ranges", "bytes")
 
-            status_code = 206 if "Content-Range" in rd_response.headers else 200
-            return StreamingResponse(
-                rd_response.aiter_bytes(),
-                status_code=status_code,
-                headers=response_headers
-            )
+                status_code = 206 if "content-range" in rd_response.headers else 200
+                return StreamingResponse(
+                    rd_response.aiter_bytes(),
+                    status_code=status_code,
+                    headers=response_headers
+                )
 
     except Exception as e:
         print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
