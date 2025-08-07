@@ -23,11 +23,10 @@ async def stream(request: Request):
     print(f"🔗 Enlace solicitado: {rd_url}")
     print(f"📡 Cliente solicitó rango: {range_header or 'SIN RANGO'}")
 
-    # 🎯 Detecta si es ffprobe y redirige directo
+    # 🎯 Detecta si es ffprobe
     is_ffprobe = range_header == "bytes=0-"
     if is_ffprobe:
-        print("🎯 ffprobe detectado por rango: redirigiendo directo a RD")
-        return RedirectResponse(rd_url)
+        print("🎯 ffprobe detectado por rango")
 
     headers = {}
     if range_header:
@@ -35,39 +34,39 @@ async def stream(request: Request):
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            rd_response = await client.stream(
+            async with client.stream(
                 method=method,
                 url=rd_url,
                 headers=headers,
                 follow_redirects=True,
-            )
+            ) as rd_response:
 
-            print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
-            print("🧾 Headers recibidos de RD:")
-            for k, v in rd_response.headers.items():
-                print(f"   {k}: {v}")
+                print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
+                print("🧾 Headers recibidos de RD:")
+                for k, v in rd_response.headers.items():
+                    print(f"   {k}: {v}")
 
-            response_headers = {
-                k: v for k, v in rd_response.headers.items()
-                if k.lower() in [
-                    "content-type",
-                    "content-length",
-                    "content-range",
-                    "accept-ranges",
-                    "cache-control",
-                    "etag",
-                    "last-modified"
-                ]
-            }
-            response_headers.setdefault("Accept-Ranges", "bytes")
+                response_headers = {
+                    k: v for k, v in rd_response.headers.items()
+                    if k.lower() in [
+                        "content-type",
+                        "content-length",
+                        "content-range",
+                        "accept-ranges",
+                        "cache-control",
+                        "etag",
+                        "last-modified"
+                    ]
+                }
+                response_headers.setdefault("Accept-Ranges", "bytes")
 
-            status_code = 206 if "content-range" in rd_response.headers else 200
+                status_code = 206 if "content-range" in rd_response.headers else 200
 
-            return StreamingResponse(
-                rd_response.aiter_bytes(),
-                status_code=status_code,
-                headers=response_headers
-            )
+                return StreamingResponse(
+                    rd_response.aiter_bytes(),
+                    status_code=status_code,
+                    headers=response_headers
+                )
 
     except Exception as e:
         print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
