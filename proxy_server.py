@@ -6,6 +6,14 @@ import uvicorn
 app = FastAPI()
 
 
+# 🛰️ Middleware para registrar todos los User-Agent
+@app.middleware("http")
+async def log_user_agent(request: Request, call_next):
+    user_agent = request.headers.get("user-agent", "N/A")
+    print(f"🛰️ User-Agent: {user_agent}")
+    return await call_next(request)
+
+
 @app.get("/stream")
 async def stream(request: Request):
     rd_url = request.query_params.get("link")
@@ -45,6 +53,9 @@ async def stream(request: Request):
             print("🧾 Headers recibidos de RD:")
             for k, v in rd_response.headers.items():
                 print(f"   {k}: {v}")
+
+            # 🕵️ Confirmación de streaming real
+            print("🕵️ Infuse o Jellyfin hizo una solicitud real de streaming")
 
             # Headers que se reenviarán
             response_headers = {
