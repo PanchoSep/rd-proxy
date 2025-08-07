@@ -74,6 +74,23 @@ async def stream(request: Request):
                 async def iter_rd_content():
                     sent = 0
                     try:
+                        # 🔥 Leer y enviar primer chunk obligatoriamente
+                        first_chunk = await rd_response.aread()
+                        if not first_chunk:
+                            print("⚠️ No se recibió ningún byte desde RD")
+                            return
+
+                        if max_bytes is not None:
+                            first_chunk = first_chunk[:max_bytes]
+
+                        sent += len(first_chunk)
+                        yield first_chunk
+
+                        if max_bytes is not None and sent >= max_bytes:
+                            print(f"✅ Corte luego del primer chunk ({sent} bytes) por ffprobe")
+                            return
+
+                        # Continuar en modo streaming
                         async for chunk in rd_response.aiter_bytes():
                             if not chunk:
                                 continue
