@@ -47,7 +47,7 @@ async def stream(request: Request):
                 for k, v in rd_response.headers.items():
                     print(f"   {k}: {v}")
 
-                # Solo los headers relevantes
+                # Copiar solo los headers relevantes
                 response_headers = {
                     k: v for k, v in rd_response.headers.items()
                     if k.lower() in [
@@ -61,16 +61,20 @@ async def stream(request: Request):
                     ]
                 }
 
-                # ⚠️ Corrige content-type si es inválido
+                # Forzar content-type válido para Infuse
                 if response_headers.get("content-type") == "application/force-download":
                     response_headers["content-type"] = "video/x-matroska"
 
-                # Asegurar que acepte Range
+                # Eliminar Content-Disposition si existe
+                response_headers.pop("content-disposition", None)
+
+                # Asegurar Accept-Ranges
                 response_headers.setdefault("Accept-Ranges", "bytes")
 
-                status_code = 206 if "content-range" in rd_response.headers else 200
+                # ✅ Si el cliente envió Range, respondemos 206
+                status_code = 206 if range_header else 200
 
-                # 🔁 Streaming manual controlado
+                # Streaming manual controlado (sin StreamingResponse)
                 async def send_body(scope, receive, send):
                     await send({
                         "type": "http.response.start",
