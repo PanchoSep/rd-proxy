@@ -3,6 +3,6 @@ FROM python:3.11-slim
 WORKDIR /app
 COPY proxy_server.py /app
 
-RUN pip install fastapi uvicorn aiohttp
+RUN pip install fastapi uvicorn httpx
 
 CMD ["uvicorn", "proxy_server:app", "--host", "0.0.0.0", "--port", "5000"]
