@@ -2,7 +2,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, PlainTextResponse
 import httpx
 import uvicorn
-from starlette.responses import Response
 
 app = FastAPI()
 
@@ -34,58 +33,58 @@ async def stream(request: Request):
 
     try:
         async with httpx.AsyncClient(timeout=None) as client:
-            rd_response = await client.get(
-                rd_url,
+            async with client.stream(
+                method=method,
+                url=rd_url,
                 headers=headers,
                 follow_redirects=True,
-                stream=True,
-            )
+            ) as rd_response:
 
-            print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
-            print("🧾 Headers recibidos de RD:")
-            for k, v in rd_response.headers.items():
-                print(f"   {k}: {v}")
+                print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
+                print("🧾 Headers recibidos de RD:")
+                for k, v in rd_response.headers.items():
+                    print(f"   {k}: {v}")
 
-            # Filtrar headers válidos
-            response_headers = {
-                k: v for k, v in rd_response.headers.items()
-                if k.lower() in [
-                    "content-type",
-                    "content-length",
-                    "content-range",
-                    "accept-ranges",
-                    "cache-control",
-                    "etag",
-                    "last-modified",
-                    "content-disposition",
-                ]
-            }
+                response_headers = {
+                    k: v for k, v in rd_response.headers.items()
+                    if k.lower() in [
+                        "content-type",
+                        "content-length",
+                        "content-range",
+                        "accept-ranges",
+                        "cache-control",
+                        "etag",
+                        "last-modified",
+                        "content-disposition",
+                    ]
+                }
 
-            # Creamos una respuesta vacía
-            async def send_body(scope, receive, send):
-                await send({
-                    "type": "http.response.start",
-                    "status": rd_response.status_code,
-                    "headers": [
-                        (k.encode("latin-1"), v.encode("latin-1"))
-                        for k, v in response_headers.items()
-                    ],
-                })
+                status_code = 206 if "content-range" in rd_response.headers else 200
 
-                async for chunk in rd_response.aiter_bytes():
+                async def send_body(scope, receive, send):
                     await send({
-                        "type": "http.response.body",
-                        "body": chunk,
-                        "more_body": True,
+                        "type": "http.response.start",
+                        "status": status_code,
+                        "headers": [
+                            (k.encode("latin-1"), v.encode("latin-1"))
+                            for k, v in response_headers.items()
+                        ],
                     })
 
-                await send({
-                    "type": "http.response.body",
-                    "body": b"",
-                    "more_body": False,
-                })
+                    async for chunk in rd_response.aiter_bytes():
+                        await send({
+                            "type": "http.response.body",
+                            "body": chunk,
+                            "more_body": True,
+                        })
 
-            return send_body
+                    await send({
+                        "type": "http.response.body",
+                        "body": b"",
+                        "more_body": False,
+                    })
+
+                return send_body
 
     except Exception as e:
         print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
