@@ -13,11 +13,10 @@ async def stream(request: Request):
         return PlainTextResponse("Missing or invalid 'link' parameter", status_code=400)
 
     range_header = request.headers.get("Range", "")
-    client_ip = request.client.host
     user_agent = request.headers.get("User-Agent", "unknown")
-    method = request.method
+    client_ip = request.client.host
 
-    print(f"🌐 Cliente: {client_ip} | Método: {method}")
+    print(f"🌐 Cliente: {client_ip} | Método: {request.method}")
     print(f"🔗 Enlace solicitado: {rd_url}")
     print(f"📡 Cliente solicitó rango: {range_header or 'SIN RANGO'}")
     print(f"🧭 User-Agent: {user_agent}")
@@ -35,19 +34,13 @@ async def stream(request: Request):
 
     try:
         async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream(
-                method=method,
-                url=rd_url,
-                headers=headers,
-                follow_redirects=True,
-            ) as rd_response:
-
+            async with client.stream("GET", rd_url, headers=headers, follow_redirects=True) as rd_response:
                 print(f"✅ Real-Debrid respondió con HTTP {rd_response.status_code}")
                 print("🧾 Headers recibidos de RD:")
                 for k, v in rd_response.headers.items():
                     print(f"   {k}: {v}")
 
-                # Copiar solo los headers relevantes
+                # Solo copiar los headers válidos
                 response_headers = {
                     k: v for k, v in rd_response.headers.items()
                     if k.lower() in [
@@ -61,20 +54,21 @@ async def stream(request: Request):
                     ]
                 }
 
-                # Forzar content-type válido para Infuse
+                # ⚠️ Reemplazar Content-Type y eliminar Content-Disposition
                 if response_headers.get("content-type") == "application/force-download":
+                    print("🔧 Corrigiendo content-type a video/x-matroska")
                     response_headers["content-type"] = "video/x-matroska"
 
-                # Eliminar Content-Disposition si existe
+                # Forzar Accept-Ranges
+                response_headers.setdefault("accept-ranges", "bytes")
+
+                # Asegurar que Content-Disposition no pase
+                if "content-disposition" in rd_response.headers:
+                    print("🧹 Eliminando content-disposition")
                 response_headers.pop("content-disposition", None)
 
-                # Asegurar Accept-Ranges
-                response_headers.setdefault("Accept-Ranges", "bytes")
-
-                # ✅ Si el cliente envió Range, respondemos 206
                 status_code = 206 if range_header else 200
 
-                # Streaming manual controlado (sin StreamingResponse)
                 async def send_body(scope, receive, send):
                     await send({
                         "type": "http.response.start",
@@ -103,7 +97,6 @@ async def stream(request: Request):
     except Exception as e:
         print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
         return PlainTextResponse("Internal Server Error", status_code=500)
-
 
 if __name__ == "__main__":
     print("🚀 Proxy Real-Debrid iniciando en puerto 5000...")
