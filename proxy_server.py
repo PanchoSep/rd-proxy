@@ -4,6 +4,10 @@ import aiohttp
 
 app = FastAPI()
 
+# 🔧 Límite de bytes a enviar si es solicitud de ffprobe (200 MB)
+FFPROBE_LIMIT_MB = 200
+FFPROBE_LIMIT_BYTES = FFPROBE_LIMIT_MB * 1024 * 1024
+
 @app.get("/stream")
 async def stream(request: Request):
     rd_url = request.query_params.get("link")
@@ -15,6 +19,8 @@ async def stream(request: Request):
     if range_header:
         headers["Range"] = range_header
         print(f"📡 Cliente solicitó rango: {range_header}")
+    else:
+        print("📡 Solicitud sin rango (GET completo o HEAD)")
 
     user_agent = request.headers.get("User-Agent", "")
     is_ffprobe = "ffprobe" in user_agent.lower()
@@ -43,16 +49,13 @@ async def stream(request: Request):
                 async def content_stream():
                     try:
                         read_bytes = 0
-                        limit_bytes = 10 * 1024 * 1024  # 10 MB para ffprobe
-
                         async for chunk in rd_resp.content.iter_chunked(1024 * 1024):  # 1MB chunks
                             read_bytes += len(chunk)
                             yield chunk
 
-                            if is_ffprobe and read_bytes >= limit_bytes:
-                                print(f"🛑 Corte anticipado: enviado {read_bytes} bytes para ffprobe")
+                            if is_ffprobe and read_bytes >= FFPROBE_LIMIT_BYTES:
+                                print(f"🛑 Corte anticipado: enviado {read_bytes / 1024 / 1024:.2f} MB para ffprobe")
                                 break
-
                     except aiohttp.ClientConnectionError:
                         print("⚠️ Real-Debrid cerró la conexión antes de tiempo.")
 
@@ -65,3 +68,8 @@ async def stream(request: Request):
     except Exception as e:
         print(f"❌ Error general en el proxy: {e}")
         raise HTTPException(status_code=500, detail="Proxy error")
+
+
+@app.get("/")
+def index():
+    return {"status": "ok", "message": "Real-Debrid proxy running"}
