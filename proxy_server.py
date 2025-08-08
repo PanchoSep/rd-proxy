@@ -1,8 +1,9 @@
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse, RedirectResponse
-from starlette.background import BackgroundTask
 import httpx
 from urllib.parse import unquote
+from starlette.status import HTTP_400_BAD_REQUEST
+import os
 
 app = FastAPI()
 
@@ -24,7 +25,6 @@ async def stream(request: Request, link: str):
         return RedirectResponse(rd_url)
 
     if range_header:
-        # Lavf externo → limitar bytes solo si es análisis
         if "Lavf" in user_agent and is_ffprobe:
             print("🎯 Lavf externo detectado, forzando Range 0-1048575")
             headers["Range"] = "bytes=0-1048575"
@@ -33,10 +33,7 @@ async def stream(request: Request, link: str):
 
     try:
         async with httpx.AsyncClient(timeout=None) as client:
-            # CORRECCIÓN CLAVE AQUÍ 👇
-            rd_stream_cm = client.stream("GET", rd_url, headers=headers)
-            rd_stream = await rd_stream_cm.__aenter__()
-
+            rd_stream = await client.stream("GET", rd_url, headers=headers)
             rd_headers = dict(rd_stream.headers)
 
             print("✅ Real-Debrid respondió con", rd_stream.status_code)
@@ -44,7 +41,6 @@ async def stream(request: Request, link: str):
             for k, v in rd_headers.items():
                 print(f"   {k}: {v}")
 
-            # Corrige headers para Infuse
             content_type = rd_headers.get("content-type", "application/octet-stream")
             content_disposition = rd_headers.get("content-disposition")
 
@@ -54,22 +50,21 @@ async def stream(request: Request, link: str):
 
             if content_disposition:
                 print("🧹 Eliminando content-disposition")
-                del rd_headers["content-disposition"]
+                rd_headers.pop("content-disposition", None)
 
             response_headers = {
                 k: v for k, v in rd_headers.items()
                 if k.lower() not in ["content-encoding", "transfer-encoding"]
             }
             response_headers["content-type"] = content_type
-
-            # CORRECCIÓN CLAVE AQUÍ 👇
-            background = BackgroundTask(rd_stream_cm.__aexit__, None, None, None)
+            response_headers["Accept-Ranges"] = "bytes"
+            response_headers["Connection"] = "keep-alive"
 
             return StreamingResponse(
                 rd_stream.aiter_bytes(),
                 status_code=rd_stream.status_code,
                 headers=response_headers,
-                background=background
+                background=httpx.BackgroundTask(rd_stream.aclose)
             )
 
     except Exception as e:
