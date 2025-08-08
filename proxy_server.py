@@ -1,14 +1,12 @@
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, BackgroundTasks
 from fastapi.responses import StreamingResponse, RedirectResponse
 import httpx
 from urllib.parse import unquote
-from starlette.status import HTTP_400_BAD_REQUEST
-import os
 
 app = FastAPI()
 
 @app.get("/stream")
-async def stream(request: Request, link: str):
+async def stream(request: Request, link: str, background_tasks: BackgroundTasks):
     rd_url = unquote(link)
     client_ip = request.client.host
     user_agent = request.headers.get("user-agent", "")
@@ -32,8 +30,9 @@ async def stream(request: Request, link: str):
             headers["Range"] = range_header
 
     try:
-        async with httpx.AsyncClient(timeout=None) as client:
-            rd_stream = await client.stream("GET", rd_url, headers=headers)
+        client = httpx.AsyncClient(timeout=None)
+        rd_stream_cm = client.stream("GET", rd_url, headers=headers)
+        async with rd_stream_cm as rd_stream:
             rd_headers = dict(rd_stream.headers)
 
             print("✅ Real-Debrid respondió con", rd_stream.status_code)
@@ -50,21 +49,21 @@ async def stream(request: Request, link: str):
 
             if content_disposition:
                 print("🧹 Eliminando content-disposition")
-                rd_headers.pop("content-disposition", None)
+                del rd_headers["content-disposition"]
 
             response_headers = {
                 k: v for k, v in rd_headers.items()
                 if k.lower() not in ["content-encoding", "transfer-encoding"]
             }
             response_headers["content-type"] = content_type
-            response_headers["Accept-Ranges"] = "bytes"
-            response_headers["Connection"] = "keep-alive"
+
+            background_tasks.add_task(rd_stream.aclose)
 
             return StreamingResponse(
                 rd_stream.aiter_bytes(),
                 status_code=rd_stream.status_code,
                 headers=response_headers,
-                background=httpx.BackgroundTask(rd_stream.aclose)
+                background=background_tasks,
             )
 
     except Exception as e:
