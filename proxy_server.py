@@ -33,10 +33,12 @@ async def stream(request: Request, link: str):
 
     try:
         async with httpx.AsyncClient(timeout=None) as client:
-            rd_stream = await client.stream("GET", rd_url, headers=headers)
+            # CORRECCIÓN CLAVE AQUÍ 👇
+            rd_stream_cm = client.stream("GET", rd_url, headers=headers)
+            rd_stream = await rd_stream_cm.__aenter__()
+
             rd_headers = dict(rd_stream.headers)
 
-            # Log headers recibidos
             print("✅ Real-Debrid respondió con", rd_stream.status_code)
             print("🧾 Headers recibidos de RD:")
             for k, v in rd_headers.items():
@@ -60,11 +62,14 @@ async def stream(request: Request, link: str):
             }
             response_headers["content-type"] = content_type
 
+            # CORRECCIÓN CLAVE AQUÍ 👇
+            background = BackgroundTask(rd_stream_cm.__aexit__, None, None, None)
+
             return StreamingResponse(
                 rd_stream.aiter_bytes(),
                 status_code=rd_stream.status_code,
                 headers=response_headers,
-                background=BackgroundTask(rd_stream.aclose)
+                background=background
             )
 
     except Exception as e:
