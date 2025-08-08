@@ -1,9 +1,8 @@
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse, RedirectResponse
+from starlette.background import BackgroundTask
 import httpx
 from urllib.parse import unquote
-from starlette.status import HTTP_400_BAD_REQUEST
-import os
 
 app = FastAPI()
 
@@ -34,38 +33,39 @@ async def stream(request: Request, link: str):
 
     try:
         async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("GET", rd_url, headers=headers) as rd_stream:
-                rd_headers = dict(rd_stream.headers)
+            rd_stream = await client.stream("GET", rd_url, headers=headers)
+            rd_headers = dict(rd_stream.headers)
 
-                # Log headers recibidos
-                print("✅ Real-Debrid respondió con", rd_stream.status_code)
-                print("🧾 Headers recibidos de RD:")
-                for k, v in rd_headers.items():
-                    print(f"   {k}: {v}")
+            # Log headers recibidos
+            print("✅ Real-Debrid respondió con", rd_stream.status_code)
+            print("🧾 Headers recibidos de RD:")
+            for k, v in rd_headers.items():
+                print(f"   {k}: {v}")
 
-                # Corrige headers para Infuse
-                content_type = rd_headers.get("content-type", "application/octet-stream")
-                content_disposition = rd_headers.get("content-disposition")
+            # Corrige headers para Infuse
+            content_type = rd_headers.get("content-type", "application/octet-stream")
+            content_disposition = rd_headers.get("content-disposition")
 
-                if content_type == "application/force-download":
-                    content_type = "video/x-matroska"
-                    print("🔧 Corrigiendo content-type a video/x-matroska")
+            if content_type == "application/force-download":
+                content_type = "video/x-matroska"
+                print("🔧 Corrigiendo content-type a video/x-matroska")
 
-                if content_disposition:
-                    print("🧹 Eliminando content-disposition")
-                    del rd_headers["content-disposition"]
+            if content_disposition:
+                print("🧹 Eliminando content-disposition")
+                del rd_headers["content-disposition"]
 
-                response_headers = {
-                    k: v for k, v in rd_headers.items()
-                    if k.lower() not in ["content-encoding", "transfer-encoding"]
-                }
-                response_headers["content-type"] = content_type
+            response_headers = {
+                k: v for k, v in rd_headers.items()
+                if k.lower() not in ["content-encoding", "transfer-encoding"]
+            }
+            response_headers["content-type"] = content_type
 
-                return StreamingResponse(
-                    rd_stream.aiter_bytes(),
-                    status_code=rd_stream.status_code,
-                    headers=response_headers,
-                )
+            return StreamingResponse(
+                rd_stream.aiter_bytes(),
+                status_code=rd_stream.status_code,
+                headers=response_headers,
+                background=BackgroundTask(rd_stream.aclose)
+            )
 
     except Exception as e:
         print(f"❌ Error al hacer proxy del link {rd_url}: {e}")
